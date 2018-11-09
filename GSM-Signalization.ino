@@ -2,16 +2,16 @@
 #include <SoftwareSerial.h>   // Library for program realization UART 
 
 #define zoneBuild  A1         // For zone of fence in the yard
-
 #define onSignalIndicate  7   // For on/off signalization indication
 
 // For audio module
 int resetPin = 2;             // The pin number of the reset pin.
-int clockPin = 3;              // The pin number of the clock pin.
+int clockPin = 3;             // The pin number of the clock pin.
 int dataPin = 4;              // The pin number of the data pin.
 int busyPin = 5;              // The pin number of the busy pin.
 
-String _response = "";  // Variable for saving module's answer
+String _response = "";        // Variable for saving module's answer
+int broke;                    // For checking broke state
 
 Wtv020sd16p wtv020sd16p(resetPin,clockPin,dataPin,busyPin);
 
@@ -29,11 +29,13 @@ void setup() {
   SIM800.begin(9600);                           // Speed of data changing with GSM-module 
   Serial.println("Start!");
 
-  sendATCommand("AT", true);                    // Set up speed
-  sendATCommand("ATS0=1", true);
+  _response = sendATCommand("AT", true);              // Set up speed
+  _response = sendATCommand("ATS0=2", true);          // Answer on incoming call after two beep
   _response = sendATCommand("AT+DDET=1,0,0", true);   // Turn on DTMF
-  _response = sendATCommand("AT+COLP=1", true);  // Set up answer on outcoming ring, only after user answer 
-  _response = sendATCommand("AT+CMGF=1;&W", true); // Turn on SMS (Text mode) and immediately saving (AT&W)!
+  _response = sendATCommand("AT+COLP=1", true);       // Set up answer on outcoming ring, only after user answer 
+  _response = sendATCommand("AT+CMGF=1;&W", true);    // Turn on SMS (Text mode) and immediately saving (AT&W)!
+  _response = sendATCommand("ATE1;&W", true);         // Turn off Echo mode
+  //_response = sendATCommand("ATV1;&W", true);       // Turn off digital answers
 
 }
 
@@ -65,16 +67,14 @@ String waitResponse() {                         // Function for waiting response
   return _resp;                                
 }
 
-// Отдельная функция для логики DTMF
+// For DTMF processing
 String result = "";                             // For output data
 void processingDTMF(String symbol) {
   Serial.println("Key: " + symbol);             // Output Serial for cotrol
   if (symbol == "1") {
         Serial.println("Signall On");
         digitalWrite(onSignalIndicate, HIGH);
-        //set = true;
         wtv020sd16p.playVoice(1);
-        //call = true;
         delay(10000);
         SIM800.println("ATH");
       }
@@ -82,19 +82,26 @@ void processingDTMF(String symbol) {
         Serial.println("Signall Off");
         digitalWrite(onSignalIndicate, LOW);
         wtv020sd16p.playVoice(2);
+        delay(10000);
+        SIM800.println("ATH");
       }
 }
 
 void loop() {
+  
   if ((digitalRead(zoneBuild) == HIGH) && (digitalRead(onSignalIndicate) == HIGH)) {
-    volatile int callTime = millis() + 5000;
+    broke++;
+    Serial.println(broke);
+  }
+  
+  if (broke >= 100) {
     sendATCommand("ATD+380936467813;", true);
-    WaitResponse:
     int waiting = 0;
     while(waiting < 3) {
       _response = waitResponse(); 
       _response.trim();
       if (_response.startsWith("+COLP:")) {
+        digitalWrite(onSignalIndicate, LOW);
         Serial.println("Play voice3");
         wtv020sd16p.playVoice(3);
         delay(7000);
@@ -103,8 +110,14 @@ void loop() {
         wtv020sd16p.playVoice(3);
         delay(7000);
         digitalWrite(onSignalIndicate, LOW);
+        broke = 0;
         break;
       } 
+      else if (_response.startsWith("BUSY")) {
+        digitalWrite(onSignalIndicate, LOW);
+        broke = 0;
+        break;
+      }
       waiting++;
     }
       sendATCommand("ATH", true);
@@ -133,10 +146,6 @@ void loop() {
           String symbol = submsg.substring(7, 8);  // Pull out a character from 7 positions with a length of 1 (8 each)
           processingDTMF(symbol);               // For convenience we bring logic to a separate function.
         }
-        else if (submsg.startsWith("BUSY") || submsg.startsWith("NO CARRIER")) {
-          Serial.println("Done? signal Off");
-          digitalWrite(onSignalIndicate, LOW);
-        }
         else if (submsg.startsWith("RING")) {   // When an incoming call ...
           sendATCommand("ATA", true);           // ...answer (pick up)
           wtv020sd16p.playVoice(0);
@@ -144,9 +153,9 @@ void loop() {
       }
     } while (index > -1);                       // As long as the line break index is valid
   }
-  if (Serial.available())  {                    // Expect on Serial command...
-    SIM800.write(Serial.read());                // ...and send the received command to the modem
-  };
+  //if (Serial.available())  {                    // Expect on Serial command...
+  //  SIM800.write(Serial.read());                // ...and send the received command to the modem
+  //};
 }
 
 void sendSMS(String phone, String message)
